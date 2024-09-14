@@ -1,14 +1,47 @@
 use crate::distance::Distance;
-use std::{cmp::min, collections::HashSet, fmt::Debug, ptr::NonNull};
+use std::{cmp::{min, Ordering}, collections::HashSet, fmt::Debug, ptr::NonNull};
 use rand::Rng;
 use std::collections::BinaryHeap as PriorityQueue;
 
+// #[derive(Debug, PartialOrd, Ord, Eq)]
 #[derive(Debug)]
-struct Node<T> {
+pub struct Node<T> {
     neighbors: PriorityQueue<NonNull<Node<T>>>,
     pub layer: usize,
     value: T
 }
+
+// impl<T> PartialEq for Node<T> {
+//     fn eq(&self, other: &Self) -> bool {
+//         self == other 
+//     }
+// }
+
+// impl<T> Eq for Node<T> {}
+
+// impl<T: Ord> PartialOrd for Node<T> {
+//     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
+
+// impl<T: Ord> Ord for Node<T> {
+//     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+//         if self.layer.cmp(&other.layer) == Ordering::Equal {
+//             return self.value.cmp(&other.value)
+//         }
+//         return self.layer.cmp(&other.layer)
+//     }
+// }
+
+// fn compare<T: Ord>(a: &T, b: &T) -> bool {
+//     if a > b{
+//         true
+//     }else {
+//         false
+//     }
+// }
+
 
 impl <T: Debug> Node<T> {
     pub fn new(value: T, layer: usize) -> Self {
@@ -38,12 +71,34 @@ impl <T: Debug> Node<T> {
     // pub fn neighborhood(&self) -> Box<[NonNull<Self>]> {
     //     Box::from_iter(self.neighbors.clone())
     // }
-    pub fn neighborhood(&self) -> PriorityQueue<NonNull<Node<T>>> {
+    pub fn get_neighbors(&self) -> PriorityQueue<NonNull<Node<T>>> {
+        // let mut neighborhood = PriorityQueue::new();
+        // for neighbor in self.neighbors.clone().into_iter() {
+        //     if get_node(&neighbor).layer == layer{
+        //         neighborhood.push(neighbor);
+        //     }
+        // }
         self.neighbors.clone()
     }
+    
+    pub fn neighborhood(&self, layer: usize) -> PriorityQueue<NonNull<Node<T>>> {
+        let mut neighborhood = PriorityQueue::new();
+        for neighbor in self.neighbors.clone().into_iter() {
+            if get_node(&neighbor).layer == layer{
+                neighborhood.push(neighbor);
+            }
+        }
+        neighborhood
+    }
 
-    pub fn set_neighborhood(&mut self, neighbors: PriorityQueue<NonNull<Node<T>>>) {
-        self.neighbors = neighbors
+    pub fn set_neighborhood(&mut self, neighbors: PriorityQueue<NonNull<Node<T>>>, layer: usize) {
+        // self.neighbors = neighbors
+        for neighbor in neighbors.into_iter() {
+            let neighbor = get_node_mut(&neighbor);
+            if neighbor.layer == layer {
+                self.connect_neighbor(neighbor);
+            }
+        }
     }
 
     /// Returns the [`Node`] from the *neighbor list* that has the value closest to `self`.
@@ -93,10 +148,10 @@ impl <T: Debug> Node<T> {
 }
 
 #[derive(Debug)]
-struct HNSW<T> {
-    graph: Vec<Node<T>>,
+pub struct HNSW<T> {
+    pub graph: Vec<Node<T>>,
     /// Head contains the Entry Point Node, and the index of the Layer it is at.
-    head: Option<NonNull<Node<T>>>
+    pub head: Option<NonNull<Node<T>>>
 }
 
 impl<T> HNSW<T>
@@ -116,15 +171,29 @@ where T: Debug + Distance {
 
     pub fn insert(&mut self, value: T, m: usize, mmax: usize, ef_construction: usize, ml:  f64) {
         let mut nearest_neighbors: PriorityQueue<NonNull<Node<T>>>;
-        let mut ep = self.head.expect("Can't insert a Node to a Hierarchical Graph with no layers");
-        let top_layer = get_node(&ep).layer;
-        let layer_to_insert = (-(rand::thread_rng().gen_range(0..1) as f64 * ml).ln()).floor() as usize;
+        let head = self.head;
+        let layer_to_insert = (-(rand::thread_rng().gen_range(0f64..1f64).ln()) * ml).floor() as usize;
         let mut q = Node::new(value, layer_to_insert);
+        println!("Query inserting: {:?}", q);
+        let mut ep;
+        if head == None {
+            self.head = Some(unsafe { NonNull::new_unchecked(&mut q) });
+            // self.graph.push(q);
+            return;
+        }
+        
+        ep = head.unwrap();
+        let top_layer = get_node(&ep).layer;
+
+        // println!("{:?}", top_layer);
+        // return;
 
         for layer in top_layer..(layer_to_insert+1) {
             nearest_neighbors = Self::search_layer(&q, get_node(&ep), 1, layer);
             // ep = q.get_nearest_from(&nearest_neighbors).expect("nearest_neighbors was empty");
-            ep = nearest_neighbors.pop().expect("nearest_neighbors was empty");
+            if nearest_neighbors.len() != 0 {
+                ep = nearest_neighbors.pop().expect("nearest_neighbors was empty");
+            }
         }
         
         for layer in min(top_layer, layer_to_insert)..0 {
@@ -133,17 +202,22 @@ where T: Debug + Distance {
                 m, layer, false, false);
             // Add bidirectional connections from neighbors to q
             for neighbor in &neighbors {
-                q.connect_neighbor(get_node_mut(neighbor));
+                let neighbor = get_node_mut(neighbor);
+                if neighbor.layer == layer {
+                    q.connect_neighbor(neighbor);
+                }
             }
             
             for neighbor in &neighbors {
-                let mut e_conn = get_node(&neighbor).neighborhood();
+                let mut e_conn = get_node(&neighbor).neighborhood(layer);
                 if e_conn.len() > mmax {
                     let e_new_conn = get_node(&neighbor)
                         .select_neighbors_heuristic(&mut e_conn, 
                         mmax, layer, false, false);
                     // todo!() // todo: set neighbor(e) at layer lc to eNewConn
-                    get_node_mut(&neighbor).set_neighborhood(e_new_conn);
+                    for neighbor in e_conn{
+                        get_node_mut(&neighbor).set_neighborhood(e_new_conn.clone(), layer);
+                    }
                 }
             }
             ep = nearest_neighbors.pop().expect("nearest_neighbors was empty");
@@ -172,15 +246,18 @@ where T: Debug + Distance {
             }
 
             for e in &c.neighbors {
-                if !visited_ele.contains(&e){
-                    visited_ele.insert(*e);
-                    let f = &w.pop().expect("Node has no neighbors");
+                let e_layer = get_node(e).layer;
+                if e_layer == layer{
+                    if !visited_ele.contains(&e){
+                        visited_ele.insert(*e);
+                        let f = &w.pop().expect("Node has no neighbors");
 
-                    if get_node(&e).distance(q) < get_node(f).distance(q) || w.len() < ef {
-                        candidates.push(&e);
-                        w.push(*e);
-                        if w.len() > ef {
-                            w.pop().expect("Node has no neighbors");
+                        if get_node(&e).distance(q) < get_node(f).distance(q) || w.len() < ef {
+                            candidates.push(&e);
+                            w.push(*e);
+                            if w.len() > ef {
+                                w.pop().expect("Node has no neighbors");
+                            }
                         }
                     }
                 }
@@ -191,7 +268,7 @@ where T: Debug + Distance {
 }
 
 
-fn get_node<T>(node: &NonNull<Node<T>>) -> &Node<T> {
+pub fn get_node<T>(node: &NonNull<Node<T>>) -> &Node<T> {
     unsafe { & *node.as_ptr() }
 }
 fn get_node_mut<T>(node: &NonNull<Node<T>>) -> &mut Node<T> {
