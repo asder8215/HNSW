@@ -215,16 +215,19 @@ where T: Debug + Distance {
         };
         let top_layer = ep.get_val().layer;
 
-        for layer in min(top_layer, layer_to_insert+1)..max(top_layer, layer_to_insert + 1) {
+        for layer in min(top_layer, layer_to_insert + 1)..max(top_layer, layer_to_insert + 1) {
             let nearest_neighbors = Self::search_layer(&q, ep.get_val_mut(), 1, layer);
             if let Some(nn) = nearest_neighbors.last() {
                 ep = *nn;
+                if top_layer > layer_to_insert {
+                    break;
+                }
             }
         }
 
-        q.as_mut().connect_neighbor(unsafe { Pin::new_unchecked(ep.get_val_mut()) });
+        // q.as_mut().connect_neighbor(unsafe { Pin::new_unchecked(ep.get_val_mut()) });
 
-        for layer in (0..min(top_layer, layer_to_insert)).rev() {
+        for layer in (0..=min(top_layer, layer_to_insert)).rev() {
             nearest_neighbors = Self::search_layer(&q, ep.get_val_mut(), ef_construction, layer);
             let neighbors = q.select_neighbors_heuristic(&nearest_neighbors, m, layer, false, false);
             // Add bidirectional connections from neighbors to q
