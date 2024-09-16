@@ -61,7 +61,7 @@ impl<T> Hash for Ref<T> {
 #[derive(Debug)]
 pub struct Node<T: Ord> {
     neighbors: PriorityQueue<Ref<Node<T>>>,
-    pub layer: usize,
+    layer: usize,
     value: T
 }
 
